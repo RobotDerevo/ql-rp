@@ -4,6 +4,7 @@
 #include "GenericButtonCommon.as";
 #include "HoverMessage.as";
 #include "Help.as";
+#include "Hitters.as";
 
 class Lever : Component
 {
@@ -33,6 +34,9 @@ void onInit(CBlob@ this)
 
 	this.addCommandID("toggle");
 	this.addCommandID("toggle client");
+	this.addCommandID("animation turn on");
+	this.addCommandID("animation turn off");
+	this.addCommandID("fuel message");
 
 	AddIconToken("$lever_0$", "Lever.png", Vec2f(16, 16), 4);
 	AddIconToken("$lever_1$", "Lever.png", Vec2f(16, 16), 5);
@@ -43,6 +47,15 @@ void onInit(CBlob@ this)
 	this.SetLight(false);
 	this.SetLightRadius(128.0f);
 	this.SetLightColor(SColor(255, 255, 240, 171));
+	this.Tag("bomberman_style");
+	this.set_f32("map_bomberman_width", 24.0f);
+	this.set_f32("explosive_radius", 64.0f);
+	this.set_f32("explosive_damage", 10.0f);
+	this.set_u8("custom_hitter", Hitters::keg);
+	this.set_string("custom_explosion_sound", "Entities/Items/Explosives/KegExplosion.ogg");
+	this.set_f32("map_damage_radius", 72.0f);
+	this.set_f32("map_damage_ratio", 1.0f);
+	this.set_bool("map_damage_raycast", true);
 }
 
 
@@ -133,18 +146,14 @@ void onCommand(CBlob@ this, u8 cmd, CBitStream @params)
 {
 	if (cmd == this.getCommandID("toggle") && isServer())
 	{
+
 		CPlayer@ p = getNet().getActiveCommandPlayer();
 		if (p is null) return;
 
 		CBlob@ caller = p.getBlob();
 		if (caller is null) return;
 
-		if(!this.hasTag("fuel"))
-		{
-			FuelMessage@ msg = FuelMessage();
-			add_message(@msg, true);
-		}
-
+		if(!this.hasTag("fuel")) {this.SendCommand(this.getCommandID("fuel message")); return;}
 
 		// range check
 		if (this.getDistanceTo(caller) > 20.0f) return;
@@ -161,20 +170,45 @@ void onCommand(CBlob@ this, u8 cmd, CBitStream @params)
 		this.set_u8("state", state);
 		this.Sync("state", true);
 
+
+
+
 		grid.setInfo(
 		component.x,                        // x
 		component.y,                        // y
 		info);                              // information
 
+		this.set_Vec2f("energy_wire", Vec2f(component.x , component.y));
 
 	}
-	if (cmd == this.getCommandID("toggle client") && isClient())
+	if (cmd == this.getCommandID("toggle") && isClient())
 	{
 		CSprite@ sprite = this.getSprite();
 		if (sprite is null) return;
 
 		sprite.SetFrameIndex(this.get_u8("state"));
 		sprite.PlaySound("LeverToggle.ogg");
+		
+	}
+	if (cmd == this.getCommandID("animation turn on") && isClient())
+	{  
+		CSprite@ sprite = this.getSprite();
+		sprite.SetEmitSoundPaused(false);
+		this.Tag("exploding");
+		if(getGameTime() % 7 == 0) {
+			makeSteamParticle(this, Vec2f(0.5f, -0.25f));
+		} // every 7 ticks
+		this.getSprite().SetAnimation("fire");
+	}
+	if (cmd == this.getCommandID("animation turn off") && isClient())
+	{
+		CSprite@ sprite = this.getSprite();
+		this.getSprite().SetAnimation("default");
+		sprite.SetEmitSoundPaused(true);
+	}
+	if (cmd == this.getCommandID("fuel message") && isClient()) {
+		FuelMessage@ msg = FuelMessage();
+		add_message(@msg, true);
 	}
 }
 
@@ -199,22 +233,41 @@ void onTick(CBlob@ this)
 	if(this.hasBlob("mat_wood", this.get_u16("fuel_for_sec"))) this.Tag("fuel");
 	else this.Untag("fuel");
 
-	CSprite@ sprite = this.getSprite();
+
 	if(state == 0 && this.hasTag("fuel")) {
+		this.SendCommand(this.getCommandID("animation turn on"));
+		this.AddScript("ExplodeOnDie.as"); //prevents cheating
 		this.SetLight(true);
-		sprite.SetEmitSoundPaused(false);
-		if(getGameTime() % 7 == 0) {
-			makeSteamParticle(this, Vec2f(0.5f, -0.25f));
-		} // every 7 ticks
 		if(getGameTime() % 30 == 0) {
 			this.TakeBlob("mat_wood", this.get_u16("fuel_for_sec"));
 		} //every second
-		this.getSprite().SetAnimation("fire");
 	}
 	else {
-		this.getSprite().SetAnimation("default");
-		this.SetLight(true);
-		sprite.SetEmitSoundPaused(true);
-	}
+		this.SendCommand(this.getCommandID("animation turn off"));
+		this.SetLight(false);
+		this.RemoveScript("ExplodeOnDie.as");
+		this.set_u8("state", 1);
+		this.Sync("state", true);
+		Component@ component = null;
+		if (!this.get("component", @component)) return;
 
+		MapPowerGrid@ grid;
+		if (!getRules().get("power grid", @grid)) return;
+
+		u8 state = this.get_u8("state") == 0? 1 : 0;
+		u8 info = state == 0? INFO_SOURCE : INFO_SOURCE | INFO_ACTIVE;
+
+
+		this.set_u8("state", state);
+		this.Sync("state", true);
+
+
+
+
+
+		grid.setInfo(
+		component.x,                        // x
+		component.y,                        // y
+		info);
+	}
 }
